@@ -1,2 +1,9 @@
-# parallel_decoder
-Parallel decoder that integrates with stim and pymatching.
+# Parallel Window Decoder
+
+A parallel window decoder integrated with `stim` and `pymatching`.
+
+## How to use
+
+```python
+
+```
