@@ -3,6 +3,12 @@ from typing import Literal, Tuple, List, Dict
 Kind = Literal["A","B"]
 
 @dataclass
+class Coord:
+    x:float
+    y:float
+    t:int
+
+@dataclass
 class Window:
     kind: Kind
     k: int
