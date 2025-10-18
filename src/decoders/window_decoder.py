@@ -5,7 +5,8 @@ import stim
 import pymatching as pm
 import numpy as np
 import threading
-from decoders.window import Window, Kind
+from decoders.window import Window, Kind, Coord
+
 
 
 def decode_window(Z_win: np.ndarray, matching) -> list[list[tuple[int, int]]]:
@@ -40,55 +41,6 @@ def make_window_view(global_syndromes: np.ndarray, win_dets: np.ndarray) -> np.n
     win_syndrome = np.zeros_like(global_syndromes, dtype=bool)
     win_syndrome[:, win_dets] = global_syndromes[:, win_dets]
     return win_syndrome  # shape (shots, num_detectors_global)
-
-def _build_face_xy(face_cols, d2c):
-    out = []
-    for d in face_cols:
-        c = d2c[d]
-        out.append((d, (c.x, c.y)))
-    return out
-
-def _align_by_xy_and_time(face_cols_B, meta_cols_A, meta_parity_A, d2c):
-    B_xy = _build_face_xy(face_cols_B, d2c)
-    A_xy = dict(_build_face_xy(meta_cols_A, d2c))
-    shots, nB = meta_parity_A.shape[0], len(B_xy)
-    out = np.zeros((shots, nB), dtype=bool)
-    posA = {int(d): j for j, d in enumerate(meta_cols_A)}
-    for jB, (dB, xy) in enumerate(B_xy):
-        dA = A_xy.get(xy)
-        if dA is None:
-            continue
-        jA = posA.get(dA)
-        if jA is not None:
-            out[:, jB] = meta_parity_A[:, jA]
-    return out
-
-
-def derive_boundary_from_A(left_meta, right_meta, w: Window, d2c):
-    left_cols = np.asarray(w.boundary_dets["back"], dtype=int)
-    right_cols = np.asarray(w.boundary_dets["forward"], dtype=int)
-
-    left_parity_mat = None
-    right_parity_mat = None
-
-    if left_meta is not None:
-        # Use A_{k-1}'s forward edge 
-        # A_{k -1} c1-1 face for B's left face at t0
-        A_cols = np.asarray(left_meta["forward_edge"]["cols"], dtype=int)
-        A_par = np.asarray(left_meta["forward_edge"]["parity"], dtype=bool)  # (shots, n_meta)
-        left_parity_mat = _align_by_xy_and_time(left_cols, A_cols, A_par, d2c)
-
-    if right_meta is not None:
-        # Use A_{k+1}'s backward edge 
-        # A_{k+1} at its c0 face for B's right face at t1-1
-        A_cols = np.asarray(right_meta["backward_edge"]["cols"], dtype=int)
-        A_par = np.asarray(right_meta["backward_edge"]["parity"], dtype=bool)  # (shots, n_meta)
-        right_parity_mat = _align_by_xy_and_time(right_cols, A_cols, A_par, d2c)
-
-    left_mask = None if left_cols.size == 0 or left_parity_mat is None else {"cols": left_cols, "parity": left_parity_mat}
-    right_mask = None if right_cols.size == 0 or right_parity_mat is None else {"cols": right_cols, "parity": right_parity_mat}
-    return left_mask, right_mask
-
 
 def apply_time_boundary_mask(s_view: np.ndarray, left_mask: dict | None, right_mask: dict | None) -> None:
     """
@@ -126,7 +78,7 @@ class ParallelWindowScheduler:
         T: int,
         n_commit: int,
         n_buffer: int,
-        d2c: dict,
+        d2c: Dict[int, List[Coord]],
         include_partial_tail: bool = True
     ):
         assert T > 0 and n_buffer > 0 and n_commit > 0
@@ -188,7 +140,7 @@ class ParallelWindowScheduler:
         B = [w for w in self._windows if w.kind == "B"]
         return A, B
 
-    # does the acutal assignment of detectors to windows.
+    # does the actual assignment of detectors to windows.
     def build_window_view(self, det_to_coords, window: Window):
         t0, t1 = window.t0, window.t1
         c0, c1 = window.c0, window.c1
@@ -256,25 +208,23 @@ class ParallelDecoder:
         window_size: Tuple[int, int],
         dem: stim.DetectorErrorModel,
         matching: pm.Matching,
-        det_to_coords,
+        det_to_coords: Dict[int, List[Coord]],
         global_syndromes: np.ndarray,
         max_workers: Optional[int] = None,
     ):
         self.dem = dem
         self.matching = matching
         self.d2c = det_to_coords
+        self.S = global_syndromes
+        self.max_workers = max_workers
+        self.Z_global = global_syndromes.astype(dtype=bool, copy=True)
 
         n_commit, n_buffer = window_size
         T = det_to_coords[max(det_to_coords.keys())].t
         self.scheduler = ParallelWindowScheduler(T,n_commit,n_buffer,self.d2c)
-        
-        self.S = global_syndromes
-        self.max_workers = max_workers
-
         self.windows: List = self.scheduler.all_windows()
-        self.Z_global = global_syndromes.astype(dtype=bool, copy=True)
-
         self.A_windows, self.B_windows = self.scheduler.layers()
+        
         self.by_k: Dict[int, object] = {w.k: w for w in self.windows}
         self._A_done: Dict[int, threading.Event] = {w.k: threading.Event() for w in self.windows}
         self._A_boundary_meta: Dict[int, dict] = {}
@@ -350,6 +300,53 @@ class ParallelDecoder:
             "backward_edge": {"t": w.t0, "cols": back_cols, "parity": back_mat},
             "forward_edge":  {"t": max(w.c0, w.c1 - 1), "cols": fwd_cols, "parity": fwd_mat},
         }
+    
+    def _build_face_xy(self, face_cols, d2c):
+        out = []
+        for d in face_cols:
+            c = d2c[d]
+            out.append((d, (c.x, c.y)))
+        return out
+
+    def _align_by_xy_and_time(self, face_cols_B, meta_cols_A, meta_parity_A, d2c):
+        B_xy = self._build_face_xy(face_cols_B, d2c)
+        A_xy = dict(self._build_face_xy(meta_cols_A, d2c))
+        shots, nB = meta_parity_A.shape[0], len(B_xy)
+        out = np.zeros((shots, nB), dtype=bool)
+        posA = {int(d): j for j, d in enumerate(meta_cols_A)}
+        for jB, (dB, xy) in enumerate(B_xy):
+            dA = A_xy.get(xy)
+            if dA is None:
+                continue
+            jA = posA.get(dA)
+            if jA is not None:
+                out[:, jB] = meta_parity_A[:, jA]
+        return out
+    
+    def derive_boundary_from_A(self, left_meta, right_meta, w: Window, d2c):
+        left_cols = np.asarray(w.boundary_dets["back"], dtype=int)
+        right_cols = np.asarray(w.boundary_dets["forward"], dtype=int)
+
+        left_parity_mat = None
+        right_parity_mat = None
+
+        if left_meta is not None:
+            # Use A_{k-1}'s forward edge 
+            # A_{k -1} c1-1 face for B's left face at t0
+            A_cols = np.asarray(left_meta["forward_edge"]["cols"], dtype=int)
+            A_par = np.asarray(left_meta["forward_edge"]["parity"], dtype=bool)  # (shots, n_meta)
+            left_parity_mat = self._align_by_xy_and_time(left_cols, A_cols, A_par, d2c)
+
+        if right_meta is not None:
+            # Use A_{k+1}'s backward edge 
+            # A_{k+1} at its c0 face for B's right face at t1-1
+            A_cols = np.asarray(right_meta["backward_edge"]["cols"], dtype=int)
+            A_par = np.asarray(right_meta["backward_edge"]["parity"], dtype=bool)  # (shots, n_meta)
+            right_parity_mat = self._align_by_xy_and_time(right_cols, A_cols, A_par, d2c)
+
+        left_mask = None if left_cols.size == 0 or left_parity_mat is None else {"cols": left_cols, "parity": left_parity_mat}
+        right_mask = None if right_cols.size == 0 or right_parity_mat is None else {"cols": right_cols, "parity": right_parity_mat}
+        return left_mask, right_mask
 
     def _decode_B_window(self, w) -> DecodeResult:
         t0, t1 = w.t0, w.t1
@@ -361,7 +358,7 @@ class ParallelDecoder:
         # get boundary meta from neighbors A_{k-1}, A_{k+1} and inject per-detector parity.
         left_meta = self._A_boundary_meta.get(w.k - 1)   # from A_{k-1}.forward
         right_meta = self._A_boundary_meta.get(w.k + 1)  # from A_{k+1}.back
-        left_mask, right_mask = derive_boundary_from_A(left_meta, right_meta, w, self.d2c)
+        left_mask, right_mask = self.derive_boundary_from_A(left_meta, right_meta, w, self.d2c)
         
         apply_time_boundary_mask(win_syndrome, left_mask, right_mask)
 
