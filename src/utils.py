@@ -10,6 +10,7 @@ from decoders.window_decoder import ParallelDecoder
 from decoders.window import Coord
 from noise import NoiseModel
 
+
 @dataclass
 class Parameters:
     physical_error_rate:float
@@ -33,11 +34,6 @@ def make_circuit(distance, rounds, noise, basis='Z'):
     )
     return circ
 
-def det_to_coords(circuit: stim.Circuit):
-    coords = circuit.get_detector_coordinates()
-    det_coords = {d : Coord(coord[0], coord[1], coord[2]) for d, coord in coords.items()}
-    return det_coords
-
 
 def run_parallel_decoder(
         circuit: stim.Circuit, 
@@ -54,18 +50,14 @@ def run_parallel_decoder(
     
     dem = circuit.detector_error_model(decompose_errors=True)
     matching = pm.Matching.from_detector_error_model(dem)
+
     sampler = circuit.compile_detector_sampler()
     syndrome, actual_observables = sampler.sample(shots=shots, separate_observables=True)
-
-    d2c = det_to_coords(circuit)
     
-
-    window_decoder = ParallelDecoder((n_commit, n_buffer), dem, matching, d2c, np.copy(syndrome))
-    
-    parallel_syn = window_decoder.decode(mode=mode)
+    window_decoder = ParallelDecoder((n_commit, n_buffer), circuit=circuit)
     
     global_preds = matching.decode_batch(syndrome)
-    parallel_pred = matching.decode_batch(parallel_syn)
+    parallel_pred = window_decoder.decode(syndrome, mode=mode)
 
     ler_global = np.sum(np.any(global_preds != actual_observables, axis=1)) / shots
     ler_parallel = np.sum(np.any(parallel_pred != actual_observables, axis=1)) / shots
