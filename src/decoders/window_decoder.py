@@ -8,18 +8,12 @@ import threading
 from decoders.window import Window, Kind, Coord
 
 
+def det_to_coords(circuit: stim.Circuit):
+    coords = circuit.get_detector_coordinates()
+    det_coords = {d : Coord(coord[0], coord[1], coord[2]) for d, coord in coords.items()}
+    return det_coords
 
-def decode_window(Z_win: np.ndarray, matching) -> list[list[tuple[int, int]]]:
-    """
-    Z_win: (shots, num_detectors_global) masked global-shaped copy (only window dets set).
-    Returns: list of length `shots`; each item is a list of (u,v) global detector indices.
-    """
-    shots = Z_win.shape[0]
-    pairs_per_shot: list[list[tuple[int, int]]] = []
-    for i in range(shots):
-        pairs_i = matching.decode_to_matched_dets_array(Z_win[i])  # shape (m_i, 2)
-        pairs_per_shot.append([(int(u), int(v)) for (u, v) in pairs_i])
-    return pairs_per_shot
+
 
 
 def write_commit(Z_global: np.ndarray, commit_set: set[int], pairs_per_shot: list[list[tuple[int, int]]]) -> np.ndarray:
@@ -206,21 +200,16 @@ class ParallelDecoder:
     def __init__(
         self,
         window_size: Tuple[int, int],
-        dem: stim.DetectorErrorModel,
-        matching: pm.Matching,
-        det_to_coords: Dict[int, List[Coord]],
-        global_syndromes: np.ndarray,
+        circuit: stim.Circuit,
         max_workers: Optional[int] = None,
     ):
-        self.dem = dem
-        self.matching = matching
-        self.d2c = det_to_coords
-        self.S = global_syndromes
+        self.d2c = det_to_coords(circuit)
+        self.dem = circuit.detector_error_model(decompose_errors=True)
+        self.matching = pm.Matching.from_detector_error_model(self.dem)
         self.max_workers = max_workers
-        self.Z_global = global_syndromes.astype(dtype=bool, copy=True)
-
+        
         n_commit, n_buffer = window_size
-        T = det_to_coords[max(det_to_coords.keys())].t
+        T = self.d2c[max(self.d2c.keys())].t
         self.scheduler = ParallelWindowScheduler(T,n_commit,n_buffer,self.d2c)
         self.windows: List = self.scheduler.all_windows()
         self.A_windows, self.B_windows = self.scheduler.layers()
@@ -250,7 +239,7 @@ class ParallelDecoder:
         win_syndrome = make_window_view(self.S, np.array(w.dets, dtype=int))
 
         # decode syndrome data for these detectors.
-        pairs_per_shot = decode_window(win_syndrome, self.matching)
+        pairs_per_shot = self.decode_window(win_syndrome)
 
         # use a lock for thread safety.
         with self._zg_lock:
@@ -261,6 +250,18 @@ class ParallelDecoder:
 
         return DecodeResult(k=w.k, kind="A", tspan=(t0, t1), cspan=(c0, c1),
                             z_hat=None, boundary_meta=boundary_meta)
+    
+    def decode_window(self, Z_win: np.ndarray) -> list[list[tuple[int, int]]]:
+        """
+        Z_win: (shots, num_detectors_global) masked global-shaped copy (only window dets set).
+        Returns: list of length `shots`; each item is a list of (u,v) global detector indices.
+        """
+        shots = Z_win.shape[0]
+        pairs_per_shot: list[list[tuple[int, int]]] = []
+        for i in range(shots):
+            pairs_i = self.matching.decode_to_matched_dets_array(Z_win[i])  # shape (m_i, 2)
+            pairs_per_shot.append([(int(u), int(v)) for (u, v) in pairs_i])
+        return pairs_per_shot
 
     def _compute_A_boundary_meta_from_pairs(self, w, pairs_per_shot) -> dict:
         """
@@ -371,12 +372,18 @@ class ParallelDecoder:
         return DecodeResult(k=w.k, kind="B", tspan=(t0, t1), cspan=(c0, c1),
                             z_hat=None, boundary_meta=None)
 
-    def decode(self, mode: str = "barrier", return_results = False) -> List | Dict[str, List[DecodeResult]]:
+    def decode(self, syndrome:np.ndarray ,mode: str = "barrier", include_window_data = False) -> List | Dict[str, List[DecodeResult]]:
         """
         mode in {"barrier", "streaming"}
         barrier := runs all A first, then B
         streaming := once B's neighbors are complete, run B.
+
+        Return
+            parallel predicitions
         """
+        self.S = syndrome
+        self.Z_global = syndrome.astype(dtype=bool, copy=True)
+
         assert mode in ("barrier", "streaming")
         if mode == "streaming":
             print("Warning: Streaming is broken, switching to `barrier`")
@@ -415,8 +422,9 @@ class ParallelDecoder:
                 for fut in as_completed(futs):
                     results_B.append(fut.result())
 
-        if return_results:
-            self.Z_global, {"A": sorted(results_A, key=lambda r: r.k),
+        parallel_predicitions = self.matching.decode_batch(self.Z_global)
+        if include_window_data:
+            parallel_predicitions, {"A": sorted(results_A, key=lambda r: r.k),
             "B": sorted(results_B, key=lambda r: r.k)}
         else:
-            return self.Z_global
+            return parallel_predicitions
