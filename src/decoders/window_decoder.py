@@ -5,8 +5,8 @@ import stim
 import pymatching as pm
 import numpy as np
 import threading
-from decoders.window import Window, Kind
-from lattice import Coord
+from src.decoders.window import Window, Kind
+from src.lattice import Coord
 
 
 def det_to_coords(circuit: stim.Circuit):

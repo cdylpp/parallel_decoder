@@ -6,8 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import List, Tuple
 from tqdm import tqdm
-from decoders.window_decoder import ParallelDecoder
-from noise import NoiseModel
+from src.decoders.window_decoder import ParallelDecoder
+from src.noise import NoiseModel
 
 
 @dataclass
