@@ -3,14 +3,12 @@ import stim
 import pymatching as pm
 import pandas as pd
 import time
-from src.utils import det_to_coords
-from parallel_decoder.src.decoders.window_decoder import ParallelWindowScheduler, ParallelDecoder
-from parallel_decoder.src.noise import NoiseModel
-from src.plots import plot
-from utils import run_parallel_decoder
+from src.decoders.window_decoder import ParallelWindowScheduler, ParallelDecoder
+from src.noise import NoiseModel
+from .plots import plot
+from .utils import run_parallel_decoder
 
 if __name__ == "__main__":
-
     physical_error_rate = 0.02 # physical error rate of 2%
     distances = [5, 7, 9, 11, 13, 15, 17]
     rounds = np.linspace(10,225,10)
@@ -54,5 +52,4 @@ if __name__ == "__main__":
     df = pd.DataFrame(data, columns=columns)
 
     plot(df, shots)
-
 

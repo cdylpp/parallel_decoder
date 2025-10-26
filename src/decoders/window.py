@@ -3,13 +3,10 @@ from typing import Literal, Tuple, List, Dict
 Kind = Literal["A","B"]
 
 @dataclass
-class Coord:
-    x:float
-    y:float
-    t:int
-
-@dataclass
 class Window:
+    """
+    Window class
+    """
     kind: Kind
     k: int
     commit: Tuple[int, int]
@@ -19,10 +16,18 @@ class Window:
     buffer_dets: List[List[int]] = None
     boundary_dets: Dict[str, List[int]] = None
     @property
-    def t0(self) -> int: return self.span[0]
+    def t0(self) -> int: 
+        """left time bound"""
+        return self.span[0]
     @property
-    def t1(self) -> int: return self.span[1]
+    def t1(self) -> int:
+        """right time bound"""
+        return self.span[1]
     @property
-    def c0(self) -> int: return self.commit[0]
+    def c0(self) -> int:
+        """left edge of commit"""
+        return self.commit[0]
     @property
-    def c1(self) -> int: return self.commit[1]
+    def c1(self) -> int:
+        """right edge of commit"""
+        return self.commit[1]

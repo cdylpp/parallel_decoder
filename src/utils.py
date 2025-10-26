@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from typing import List, Tuple
 from tqdm import tqdm
 from decoders.window_decoder import ParallelDecoder
-from decoders.window import Coord
 from noise import NoiseModel
 
 
 @dataclass
 class Parameters:
+    """
+    Experiment parameters
+    """
     physical_error_rate:float
     distances:List[int]
     rounds:List[int]
@@ -66,11 +68,21 @@ def run_parallel_decoder(
 
 
 def run_experiment(parameters: Parameters, **kwargs) -> pd.DataFrame:
+    """
+    Run parallel decoder experiment given the set of parameters.
+
+    Returns a pandas DataFrame object with the following features:
+        - physical_error_rate
+        - lattice_size
+        - rounds
+        - logical_error_rate
+        - time
+        - type
+    """
     p = parameters.physical_error_rate
     D = parameters.distances
     r = parameters.rounds
     shots = parameters.shots
-    correlated = parameters.correlated
     mode = parameters.mode
 
     data = []

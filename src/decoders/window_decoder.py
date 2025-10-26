@@ -5,15 +5,14 @@ import stim
 import pymatching as pm
 import numpy as np
 import threading
-from decoders.window import Window, Kind, Coord
+from decoders.window import Window, Kind
+from lattice import Coord
 
 
 def det_to_coords(circuit: stim.Circuit):
     coords = circuit.get_detector_coordinates()
     det_coords = {d : Coord(coord[0], coord[1], coord[2]) for d, coord in coords.items()}
     return det_coords
-
-
 
 
 def write_commit(Z_global: np.ndarray, commit_set: set[int], pairs_per_shot: list[list[tuple[int, int]]]) -> np.ndarray:
